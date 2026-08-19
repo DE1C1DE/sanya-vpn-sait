@@ -15,8 +15,15 @@ usage() {
     --domain vpn.example.com \
     --admin-password 'сложный-пароль'
 
+Установка в HTTP-режиме без домена:
+  sudo bash install-from-github.sh \
+    --repo OWNER/REPOSITORY \
+    --admin-password 'сложный-пароль'
+
 Параметры --domain, --admin-password, --public-origin и --force-db
-передаются во внутренний install.sh.
+передаются во внутренний install.sh. --domain задает домен для HTTPS;
+без него установка проходит в HTTP-режиме. Повторный запуск с другим
+--domain переключает установленный сервер на новый домен.
 EOF
 }
 

@@ -17,12 +17,16 @@ usage() {
 Установка сервиса «Три буквы от Сани»
 
 Использование:
-  sudo bash install.sh --domain vpn.example.com --admin-password 'сложный-пароль'
+  sudo bash install.sh --admin-password 'сложный-пароль'                      (HTTP-режим, без домена)
+  sudo bash install.sh --domain vpn.example.com --admin-password 'сложный-пароль'  (HTTPS-режим)
 
 Параметры:
-  --domain NAME             Домен с A-записью на этот сервер, обязателен
+  --domain NAME             Домен с A-записью на этот сервер. Если не указан,
+                            приложение устанавливается в HTTP-режиме без
+                            сертификата; домен можно добавить позже повторным запуском
   --admin-password VALUE    Пароль администратора; если не задан, будет сгенерирован
-  --public-origin URL       Публичный URL, по умолчанию https://DOMAIN
+  --public-origin URL       Публичный URL. По умолчанию https://DOMAIN, а без домена
+                            ссылки строятся автоматически из адреса запроса
   --force-db                Перезаписать /opt/tri-bukvy/data.sqlite3 локальной базой
   --help                    Показать эту справку
 EOF
@@ -43,11 +47,7 @@ if [[ "${EUID}" -ne 0 ]]; then
     echo "Запустите установщик через sudo или от root." >&2
     exit 1
 fi
-if [[ -z "${DOMAIN}" ]]; then
-    echo "Нужно указать --domain. DNS A-запись домена должна уже указывать на этот сервер." >&2
-    exit 1
-fi
-if [[ -z "${PUBLIC_ORIGIN}" ]]; then
+if [[ -z "${PUBLIC_ORIGIN}" && -n "${DOMAIN}" ]]; then
     PUBLIC_ORIGIN="https://${DOMAIN}"
 fi
 if [[ -z "${ADMIN_PASSWORD}" ]]; then
@@ -56,11 +56,16 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y python3 sqlite3 nginx openssl certbot curl ca-certificates
+apt-get install -y python3 sqlite3 nginx openssl curl ca-certificates
+if [[ -n "${DOMAIN}" ]]; then
+    apt-get install -y certbot
+fi
 
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
     ufw allow 80/tcp
-    ufw allow 443/tcp
+    if [[ -n "${DOMAIN}" ]]; then
+        ufw allow 443/tcp
+    fi
 fi
 
 install -d -m 0750 "${APP_DIR}"
@@ -93,8 +98,9 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-install -d -m 0755 /var/www/certbot
-cat > "${NGINX_FILE}" <<EOF
+if [[ -n "${DOMAIN}" ]]; then
+    install -d -m 0755 /var/www/certbot
+    cat > "${NGINX_FILE}" <<EOF
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -102,12 +108,30 @@ server {
     location / { return 301 https://\$host\$request_uri; }
 }
 EOF
+else
+    cat > "${NGINX_FILE}" <<EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    client_max_body_size 4m;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-Proto http;
+    }
+}
+EOF
+fi
 ln -sfn "${NGINX_FILE}" "/etc/nginx/sites-enabled/${APP_NAME}"
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl enable --now "${APP_NAME}"
 systemctl reload nginx
 
+if [[ -n "${DOMAIN}" ]]; then
 certbot certonly --webroot -w /var/www/certbot -d "${DOMAIN}" --non-interactive --agree-tos --register-unsafely-without-email
 
 cat > "${NGINX_FILE}" <<EOF
@@ -135,11 +159,19 @@ server {
 EOF
 nginx -t
 systemctl reload nginx
+fi
 systemctl restart "${APP_NAME}"
 
 echo
 echo "Установка завершена."
-echo "Сайт: https://${DOMAIN}/"
-echo "Админка: https://${DOMAIN}/admin"
+if [[ -n "${DOMAIN}" ]]; then
+    echo "Сайт: https://${DOMAIN}/"
+    echo "Админка: https://${DOMAIN}/admin"
+    echo "Проверка: https://${DOMAIN}/health"
+else
+    echo "Домен не задан: сайт работает по HTTP."
+    echo "Сайт: http://<IP-адрес-сервера>/"
+    echo "Админка: http://<IP-адрес-сервера>/admin"
+    echo "Подключить домен и HTTPS позже: sudo bash install.sh --domain vpn.example.com --admin-password '${ADMIN_PASSWORD}'"
+fi
 echo "Пароль администратора: ${ADMIN_PASSWORD}"
-echo "Проверка: https://${DOMAIN}/health"
