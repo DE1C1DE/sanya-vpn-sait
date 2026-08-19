@@ -15,6 +15,8 @@ usage() {
 Скрипт скачает проект, установит приложение и спросит домен и пароль
 администратора. Если оставить поля пустыми, будет настроен HTTP-режим,
 а пароль сгенерирован автоматически (будет выведен в конце).
+Скрипты установки сохраняются в /opt/tri-bukvy, поэтому домен и пароль
+можно изменить позже: sudo bash /opt/tri-bukvy/install.sh --domain NAME --admin-password VALUE
 
 Неинтерактивная установка (CI или без терминала):
   sudo bash install-from-github.sh --domain vpn.example.com --admin-password 'пароль'
@@ -66,11 +68,20 @@ has_arg() {
 
 ask() {
     local label="$1" var="$2" hidden="$3" answer=""
+    if ! test -e /dev/tty; then
+        return 0
+    fi
+    printf '%s' "${label}"
     if [[ "${hidden}" == "1" ]]; then
-        read -r -s -p "${label}" answer < /dev/tty 2>/dev/null || return 0
+        if ! read -r -s answer < /dev/tty; then
+            printf '\n'
+            return 0
+        fi
         printf '\n'
     else
-        read -r -p "${label}" answer < /dev/tty 2>/dev/null || return 0
+        if ! read -r answer < /dev/tty; then
+            return 0
+        fi
     fi
     if [[ -n "${answer}" ]]; then
         printf -v "${var}" '%s' "${answer}"
@@ -103,5 +114,12 @@ if ! has_arg "--admin-password"; then
     fi
 fi
 
-chmod +x "${PROJECT_DIR}/install.sh"
-exec bash "${PROJECT_DIR}/install.sh" "${INSTALL_ARGS[@]}"
+install -d -m 0750 /opt/tri-bukvy
+install -m 0755 "${PROJECT_DIR}/install.sh" /opt/tri-bukvy/install.sh
+install -m 0755 "${PROJECT_DIR}/backup.sh" /opt/tri-bukvy/backup.sh
+install -m 0644 "${PROJECT_DIR}/app.py" /opt/tri-bukvy/app.py
+echo "Скрипты сохранены в /opt/tri-bukvy (install.sh, backup.sh)."
+echo "Повторный запуск для смены домена или пароля:"
+echo "  sudo bash /opt/tri-bukvy/install.sh --domain vpn.example.com --admin-password 'пароль'"
+
+bash "${PROJECT_DIR}/install.sh" "${INSTALL_ARGS[@]}"
