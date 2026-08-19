@@ -1,29 +1,32 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPOSITORY=""
+REPOSITORY="DE1C1DE/sanya-vpn-sait"
 REF="main"
 INSTALL_ARGS=()
 
 usage() {
     cat <<'EOF'
-Установка «Три буквы от Сани» напрямую из GitHub
+Установка «Три буквы от Сани» одной командой из GitHub
 
-Пример:
-  sudo bash install-from-github.sh \
-    --repo OWNER/REPOSITORY \
-    --domain vpn.example.com \
-    --admin-password 'сложный-пароль'
+Запуск без параметров:
+  curl -fsSL https://raw.githubusercontent.com/DE1C1DE/sanya-vpn-sait/main/install-from-github.sh | sudo bash
 
-Установка в HTTP-режиме без домена:
-  sudo bash install-from-github.sh \
-    --repo OWNER/REPOSITORY \
-    --admin-password 'сложный-пароль'
+Скрипт скачает проект, установит приложение и спросит домен и пароль
+администратора. Если оставить поля пустыми, будет настроен HTTP-режим,
+а пароль сгенерирован автоматически (будет выведен в конце).
 
-Параметры --domain, --admin-password, --public-origin и --force-db
-передаются во внутренний install.sh. --domain задает домен для HTTPS;
-без него установка проходит в HTTP-режиме. Повторный запуск с другим
---domain переключает установленный сервер на новый домен.
+Неинтерактивная установка (CI или без терминала):
+  sudo bash install-from-github.sh --domain vpn.example.com --admin-password 'пароль'
+
+Параметры:
+  --repo OWNER/REPOSITORY   Репозиторий (по умолчанию DE1C1DE/sanya-vpn-sait)
+  --ref NAME                Ветка или тег (по умолчанию main)
+  --domain NAME             Домен для HTTPS; без него — HTTP-режим
+  --admin-password VALUE    Пароль администратора; без него — генерируется
+  --public-origin URL       Публичный URL
+  --force-db                Перезаписать базу при наличии локальной
+  --help                    Показать эту справку
 EOF
 }
 
@@ -49,17 +52,56 @@ if [[ ! "${REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 fi
 
 command -v curl >/dev/null 2>&1 || { apt-get update && apt-get install -y curl ca-certificates; }
-ARCHIVE_URL="https://github.com/${REPOSITORY}/archive/refs/heads/${REF}.tar.gz"
-WORK_DIR="$(mktemp -d -t tri-bukvy-github-XXXXXX)"
-trap 'rm -rf "${WORK_DIR}"' EXIT
+
+has_arg() {
+    local key="$1"
+    local arg
+    for arg in "${INSTALL_ARGS[@]}"; do
+        if [[ "${arg}" == "${key}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+ask() {
+    local label="$1" var="$2" hidden="$3" answer=""
+    if [[ "${hidden}" == "1" ]]; then
+        read -r -s -p "${label}" answer < /dev/tty 2>/dev/null || return 0
+        printf '\n'
+    else
+        read -r -p "${label}" answer < /dev/tty 2>/dev/null || return 0
+    fi
+    if [[ -n "${answer}" ]]; then
+        printf -v "${var}" '%s' "${answer}"
+    fi
+}
 
 echo "Скачивание ${REPOSITORY}, ref=${REF}"
-curl --fail --location --silent --show-error "${ARCHIVE_URL}" -o "${WORK_DIR}/project.tar.gz"
+WORK_DIR="$(mktemp -d -t tri-bukvy-github-XXXXXX)"
+trap 'rm -rf "${WORK_DIR}"' EXIT
+curl --fail --location --silent --show-error "https://github.com/${REPOSITORY}/archive/refs/heads/${REF}.tar.gz" -o "${WORK_DIR}/project.tar.gz"
 tar -xzf "${WORK_DIR}/project.tar.gz" -C "${WORK_DIR}"
 PROJECT_DIR="$(find "${WORK_DIR}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 if [[ ! -f "${PROJECT_DIR}/install.sh" ]]; then
     echo "В репозитории не найден install.sh." >&2
     exit 1
 fi
+
+if ! has_arg "--domain" && ! has_arg "--public-origin"; then
+    DOMAIN_VALUE=""
+    ask "Введите домен для HTTPS (Enter — HTTP-режим без сертификата): " DOMAIN_VALUE 0
+    if [[ -n "${DOMAIN_VALUE}" ]]; then
+        INSTALL_ARGS+=("--domain" "${DOMAIN_VALUE}")
+    fi
+fi
+if ! has_arg "--admin-password"; then
+    PASSWORD_VALUE=""
+    ask "Пароль администратора (Enter — сгенерировать автоматически): " PASSWORD_VALUE 1
+    if [[ -n "${PASSWORD_VALUE}" ]]; then
+        INSTALL_ARGS+=("--admin-password" "${PASSWORD_VALUE}")
+    fi
+fi
+
 chmod +x "${PROJECT_DIR}/install.sh"
 exec bash "${PROJECT_DIR}/install.sh" "${INSTALL_ARGS[@]}"
